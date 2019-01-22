@@ -1,0 +1,10 @@
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+deps/deps.jl
+Manifest.toml
+.ipynb_checkpoints
+data/silly.*
+data/kplr_dr25_inj1_plti*
+data/DR25_DEModel_NoisyTargetList.*
+data/KeplerMAST_TargetProperties.*

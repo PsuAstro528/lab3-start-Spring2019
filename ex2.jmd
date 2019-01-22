@@ -1,0 +1,195 @@
+
+# Astro 528, Lab 3, Exercise 2
+
+# Integrating Data from Multiple DataFrames
+
+In thie exercise, we'll integrate data from multiple different `DataFrames`. 
+We'll pick one simple operation (removing rows) and compare the performance of two hand-rolled approaches to using a _join_ operation.
+
+First, let's make sure that all the necessary Julia packages are installed and import a few packages that we'll use.    
+
+```julia
+using Pkg
+Pkg.activate(".")
+Pkg.instantiate()
+using DataFrames, CSV, Feather
+```
+
+### Read first file
+First, let's read in one of the data files that you created in Exercise 1.
+
+```julia
+path = basename(pwd())=="test" ? "../data/" : "data/"
+url = "https://exoplanetarchive.ipac.caltech.edu/data/KeplerData/Simulated/kplr_dr25_inj1_plti.txt"
+filename_ipac = path * basename(url)    # extract the filename and prepend path to data directory
+filename_feather = replace(filename_ipac, ".txt" => ".feather") 
+if !isfile(filename_feather)
+    download(url,filename_feather)
+end
+df_inj1 = Feather.read(filename_feather)
+```
+
+### Task 1: Remove a subset of rwos
+
+It turns out that some of the stars the Kepler mission observed are particularly noisy.  
+Since there stars are not representative of the stars that Kepler searched for planet, the Kepler project suggested that people consider excluding these stars when computing the detection efficiency from simulated data.
+They kindly provided a list of the KIC_ID's of such stars that we can download.  
+
+### Download & Read Second File
+
+```julia
+url = "https://raw.githubusercontent.com/nasa/KeplerPORTs/master/DR25_DEModel_NoisyTargetList.txt"
+filename = path * basename(url)    # extract the filename and prepend "data/"
+if !isfile(filename)
+   download(url,filename)
+end
+```
+
+```julia
+stars_to_exclude = CSV.read(filename,header=["KIC_ID"],skipto=11)
+```
+
+In this exercise, we'll try removing those stars from our DataFrame a few different ways and compare the performance.
+
+### Remove Rows Manually, One-by-one
+
+Perhaps, the most obvious way is to go through the list and remove each noisy star one at a time.  Let's write a function to do that first.  We'll call it once with an empty list of stars to exclude, so that Julia compiles the code.  
+
+```julia
+"""
+   remove_rows_from_dataframe_one_by_one(df, col_name, values_to_delete)
+
+Remove rows from df if df[:col_name] matches a value in values_to_delete[:colname].
+Warning: This is extremely inefficient and serves as an example of what _not_ to do.
+"""
+function remove_rows_from_dataframe_one_by_one(df::DataFrame, col_name, values_to_delete)
+   for v in values_to_delete[col_name]
+      ind = findfirst(x->x==v,  df_inj1[:KIC_ID] )
+      if ind == nothing
+            continue
+      end
+      if 1 < ind < size(df,1)
+        df = df[[1:(ind-1);(ind+1):end],:]
+      elseif ind == 1
+        df = df[2:end,:]
+      elseif ind == size(df,1)
+        df = df[1:end-1,:]
+      end
+   end
+   return df
+end
+
+small_df = DataFrame(KIC_ID=Int64[])
+df_tmp = deepcopy(df_inj1)
+df_trimed = remove_rows_from_dataframe_one_by_one(df_tmp, :KIC_ID, small_df)
+```
+
+Now, time it while running on our real DataFrame.  Be warned... It's so painfully slow, that when we call it, I suggest that you may only want ask it to exclude the first 1000 stars.
+
+```julia
+@time df_trimed = remove_rows_from_dataframe_one_by_one(df_tmp, :KIC_ID, stars_to_exclude[1:1000,:]);
+size(df_trimed)
+```
+
+### Remove Rows Manually, All at once using a "mask"
+
+```julia
+"""
+   remove_rows_from_dataframe_mask(df, col_name, values_to_delete)
+
+Remove rows from df if df[:col_name] matches a value in values_to_delete[:colname].
+Warning: This is not as efficient as using a `join`.
+"""
+function remove_rows_from_dataframe_mask(df::DataFrame, col_name::Symbol, values_to_delete::DataFrame)
+   keep = trues(size(df,1))
+   for v in values_to_delete[col_name]
+      ind = findfirst(x->x==v,  df_inj1[:KIC_ID] )
+      if ind != nothing
+            keep[ind] = false
+      end
+   end
+   return df[keep,:]
+end
+
+df_tmp = deepcopy(df_inj1)
+df_trimed = remove_rows_from_dataframe_mask(df_tmp, :KIC_ID, small_df)
+```
+
+What do you anticipate will be the ratio of time required to remove rows using this function relative to using `remove_rows_from_dataframe_one_by_one`?  (The full list of stars to exclude is 8628 KIC_ID's, rather than just 1,000.)
+    
+INSERT RESPONSE
+
+```julia
+@time df_trimed = remove_rows_from_dataframe_mask(df_tmp, :KIC_ID, stars_to_exclude);
+size(df_trimed)
+```
+
+How did the results compare to your expectations?
+
+INSERT RESPONSE
+
+### Remove Rows using  Join, kind=:anti
+This is such a common operation, that computer scientists have worked hard to implement it efficiently.  They refer to these types of operations as doing a [`join`](http://juliadata.github.io/DataFrames.jl/stable/man/joins.html).  In this case we're excluding rows, so the "kind" of join is "Anti".  
+
+As before, we'll do a small test to make sure the functions are compiled.
+
+```julia
+df_tmp = deepcopy(df_inj1)
+join(df_tmp, small_df, on=:KIC_ID, kind=:anti);
+```
+
+How much faster do you expect using `join` will be relative to using `remove_rows_from_dataframe_mask`?  
+
+INSERT RESPONSE
+
+```julia
+@time df_trimed = join(df_tmp, stars_to_exclude, on=:KIC_ID, kind=:anti);
+size(df_trimed)
+```
+
+How did your benchmarking compare to your expectations?
+
+## Task 2: Combine data from two files
+
+It turns out that there's lots more known about each of Kepler's targets than what is in the first file we downloaded.
+For the sake of an example, I'll provide a CSV file with information about when each star was observed.  The meaning of most columns isn't important for this exercise.  We're just practicing how merge the DataFrames.  
+
+First, let's download and read in the file.
+
+```julia
+url = "http://personal.psu.edu/~ebf11/data/kepler/KeplerMAST_TargetProperties.csv"
+filename = path * basename(url)    # extract the filename and prepend "data/"
+if !isfile(filename)
+  download(url,filename)
+end
+
+df_mast = CSV.read(filename)
+```
+
+### Join
+
+Notice that `df_mast` has a column `kepid`, while `df_inj1` has a column `KIC_ID`.  We know that these are the same, but the computer doesn't.  We'll rename one of them, so they match.  Then, we can perform a `join` on the two DataFrames, using KEP_ID as the common _key_ for identifying which rows go together.  
+
+    
+    
+
+```julia
+@time rename!(df_mast, :kepid => :KIC_ID)
+```
+
+Notice that renmaing the column was very fast and resulted in allocating very little memory.  
+Now we can join the two tables by the key `:KIC_ID`.
+
+```julia
+join(df_inj1[1:100,:],df_mast[1:100,:], on=:KIC_ID)      # call once so it compiles before timing the real call
+@time df_combined = join(df_inj1,df_mast, on=:KIC_ID)
+```
+
+## Advanced features
+There are multiple packages (e.g., [Query.jl](http://www.queryverse.org/Query.jl/stable/gettingstarted.html) and [DataFramesMeta.jl](https://github.com/JuliaData/DataFramesMeta.jl)) that provide efficient means of [querying DataFrames](http://juliadata.github.io/DataFrames.jl/stable/man/querying_frameworks.html).  
+Databases have been the subject of much computer science research.  Therefore, it is often significantly more efficient to use packages such as these, rather than trying to implement similar operations yourself. 
+
+If your class project will involve you performing complex queries or manipulations of DataFrames, then I'd suggest you tinker around below, before attempting to implement complicated queries for your real project.  If you do, please conclude with a brief summary of what you learned and any thing that surprised you.
+
+```julia
+```

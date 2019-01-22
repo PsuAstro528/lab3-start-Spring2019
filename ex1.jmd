@@ -1,0 +1,421 @@
+
+# Astro 528, Lab 3, Exercise 1
+
+# Benchmarking File I/O & Calling Python 
+
+For many applications, its important that we be able to read input data from a file and/or to write our outputes to files so they can be reused later.  Disk access is typically much slower than accessing system memory.  Therefore, disk access can easily become the limiting factor for a project.  In this set of exercises, you'll see examples of how to perform basic file I/O.  
+
+You'll be provided with most of the code you need, so that you can focus on comparing how much disk space and time is required by different file formats.  Near the end of the lab, you'll be asked to think about when each type of file format would be a good choice for you to use in your research projects.
+
+First, let's make sure you have all the packages you'll need installed.
+
+```julia
+using Pkg
+Pkg.activate(".")
+Pkg.instantiate()
+```
+
+### Download some data
+First, we're going to download some data from the web.  Julia has a built in `download` function that can be handy for this.  It relies on your system having some utilities already installed (e.g., `curl`, `wget` or `fetch`).  If you run into trouble, then you can leave the cell below (for testing purposes), but manually download the file to the data subdirectory.
+
+```julia
+path = basename(pwd())=="test" ? "../data/" : "data/"
+url = "https://exoplanetarchive.ipac.caltech.edu/data/KeplerData/Simulated/kplr_dr25_inj1_plti.txt"
+filename_ipac = joinpath(path,basename(url))    # extract the filename and prepend "data/"
+if !isfile(filename_ipac)
+    println("# Will now attempt to download " * url * " into " * filename_ipac)
+    download(url,filename_ipac)           # download the file
+end
+```
+
+Previously, everything you needed for an assignment was included in a GitHub repository.  So why did I make you download the file?
+
+Notice the size of the file.  Git is great for tracking source code, but it wasn't really designed for working with large files (especially large _binary_ files).  Since  we're not going to be editing it, we'll simply download it once.  Besides, it's useful to know how to download a file from within a julia script.  
+
+### Install packages to storage, read and write data
+
+Here I've picked a file containing the results of applying the pipeline for NASA's Kepler mission to [simulated data](https://exoplanetarchive.ipac.caltech.edu/docs/KeplerSimulated.html) in which the signals of simulated "planet's" have been injected into actual Kepler data.  This data set is the basis for computing the efficiency of the Kepler pipeline at detecting real planets.  This dataset has played an important role in enabling astronomers to estimate the occurrence rates of planets around other stars.  
+For documentation of its contents, you could read [its documentation](https://exoplanetarchive.ipac.caltech.edu/docs/KSCI-19110-001.pdf).  However, for now, we'll just do some basic manipulations of the file, so the details of its contents aren't important.  That said, it is important to know the _file format_.  
+
+This data file that we downloaded is in [IPAC format](https://irsa.ipac.caltech.edu/applications/DDGEN/Doc/ipac_tbl.html).  
+It would be tedious to learn the details of every file format that is used in astronomy, let alone to write our own code to read them.  Fortunately, there are packages that can read the most common file formats.  
+This an example of something that [astropy](http://docs.astropy.org) is particularly good for.  It provides a function [`astropy.io.ascii.read`](http://docs.astropy.org/en/stable/io/ascii/) that will read a file in IPAC for us.  
+Since astropy is written in Python, we import the [`PyCall`](https://github.com/stevengj/PyCall.jl) package, so we can import python packages and call python functions from Julia.  
+Since reading a file from disk is typically limited by the rate of getting data from disk, rather than compute speed, it's usually not a problem that Python isn't particularly fast, when it's comes to reading files.
+
+
+```julia
+using PyCall
+```
+
+Now we need to import the required python module using the `@pyimport` macro.  
+
+```julia
+@pyimport astropy.io.ascii as astropy_io_ascii  # Import from SciPy
+```
+
+Now, we can review the documentation for [`astropy.io.ascii.read`](http://docs.astropy.org/en/stable/io/ascii/) and call that function load the data in our input file.  Let's use `@time`, so we can compare the time required to read various formats.
+
+```julia
+@time data_from_astropy = astropy_io_ascii.read(filename_ipac, format="ipac", fast_reader=false)
+```
+
+On the plus side, the data was read in.  However, what is the type of the data we just read and stored into data_from_astropy?  
+
+```julia
+typeof(data_from_astropy)
+```
+
+Since Python is weakly-typed language, it's type is `PyObject`.  That can contain most anything!  
+That flexibility can be convenient, but it is also one of the reasons that Python is not a good language for high-performance computing.  To enable Julia to work efficiently with the data, we'll want Julia to know what type the data is and store a list of strictly-typed columns into a the data into a `DataFrame`.
+The PyCall package provides an interface for For accessing data from PyObjects.  Because of the weak typing issue, the syntax is a bit funny.  
+
+If you're not intending to call Python for your class project, then there's no reason to worry about that these details.  So this list is just for students who are curious about accessing Python data and methods from Julia.
+- Given `o::PyObject`, `o[:attribute]` is equivalent to `o.attribute` in Python, with automatic type conversion.  
+- Given `o::PyObject`, `get(o, key)` is equivalent to `o[key]` in Python, with automatic type conversion.  
+- There's more information about accessing data in PyObjects (and other types to contain Python data) in the [PyCall documentation](https://github.com/JuliaPy/PyCall.jl#types).
+
+For now, you can get a ["Dictionary"](https://docs.julialang.org/en/v1/base/collections/index.html#Dictionaries-1) by using `data_from_astropy[:columns]`.  The dictionary consists of a set of _keys_ (in this case strings), where each key is associated with a _value_ (in this case a Vector or 1-d array).  
+Often times, the data you want to work with can be represented as a table.  For efficiency's sake, it's usually best to represent these as a bunch of `Vector`'s, each containing one columns of data.  Using a `Dict` allows you to give the columns names (instead of just numbers) and allows each column to have a different type (again useful for Julia to optimize your code).  
+
+```julia
+@time dict = data_from_astropy[:columns]
+```
+
+Most of the columns can be automatically converted to an array with a known Julia type.  For example, `data_from_astropy[:columns]["KIC_ID"]` returns data as an `Array{Int64,1}`.  However, value associated with `TCE_ID` is some `PyObject` that can't be automatically reinterpretted as a Julia array.  Since many KIC_IDs don't have an associated TCE_ID, there are many missing entries.  Python is trying to store a list with lots of empty entries efficiently, but PyCall doesn't (yet?) know how to deal with this "masked array".  Working with the data when Julia can't know its type would be very inefficient.  Therefore, we want to create an array of Strings that allows Julia to represent this data more efficiently.  Technically, it will be an array where each element is either a `String` or a `missing`.  It took a little tinkering, but eventually, I figured out how to extract that data into an efficient Julia object.
+
+```julia
+@time TCE_ID_list = map(x -> x != nothing ? x : missing, data_from_astropy[:columns]["TCE_ID"]["data"]["tolist"]())
+```
+
+Now let's replace the value associated with TCE_ID with this list.
+
+```julia
+dict["TCE_ID"] = TCE_ID_list;
+```
+
+If we just wantted to access the data, then we could use the data stored in dict as a dictionary.  
+However, a dictionary doesn't guarentee anything about the relationship of the value of different keys.
+For example, in a table, each column should have the same number of rows.  Therefore, we'll switch from representing the data as a dictionary and start using a `DataFrame`. A `DataFrame` can be thought of as a table, where the data for each column is stored as an array.   A `DataFrame` also provides some additional features to allow easy and efficient access and manipulation of the table that will come in useful later.  
+
+First, we'll import the [DataFrames.jl package](https://github.com/JuliaData/DataFrames.jl) and create a small `DataFrame` (so the functions get compiled).
+
+```julia
+using DataFrames
+# Create a small DataFrame so compilation time won't be included below
+small_df = DataFrame(a=[1,2],b=[3,4],c=["hello",missing])
+```
+
+Then, we'll use our existing dictionary to initialize a `DataFrame`.  
+
+```julia
+@time df = DataFrame(dict);
+```
+
+Look at how much memory was allocated during this line of code.  Did Julia make a new copy of all of the data?  Any of the data?
+
+INSERT RESPONSE
+
+
+## Writing a CSV file
+
+The IPAC format allows for significant metadata, but reading it can be annoying.  
+Let's say that we'd like to write the data to a [CSV file](https://en.wikipedia.org/wiki/Comma-separated_values), so that it's easier for other programs to read in.  We could import the CSV package and write it out with the following code.
+
+```julia
+using CSV
+# Read & write a small test file so compilation time not included below
+small_df = DataFrame(a=[1,2],b=[3,4],c=["hello",missing])
+CSV.write(joinpath(path,"silly.csv"),small_df)  
+CSV.read(joinpath(path,"silly.csv"));
+```
+
+Now, let's write our DataFrame to a CSV file and time how long it takes.
+
+```julia
+filename_csv = replace(filename_ipac, ".txt" => ".csv") 
+@time CSV.write(filename_csv,df)
+```
+
+## Comparing time to read text files
+
+Look back at how long it took to read in the file in IPAC format.  How long do you think it will take to read in the same data in CSV format?
+    
+INSERT RESPONCE
+    
+Now, try reading it in and see.   
+    
+
+```julia
+@time df_csv = CSV.read(filename_csv);
+```
+
+How did the time required to read the data in CSV format compare to the time to read the data in IPAC format?
+
+Next, we'll compare the filesizes.  
+
+```julia
+filesize(filename_ipac)
+```
+
+```julia
+filesize(filename_csv)
+```
+
+How do the sizes of the files in the two formats compare?  
+
+INSERT RESPONSE
+
+## Cleaning up memory
+
+If we were writing a proper program with nearly all of the work occurring inside functions, then Julia's garbage collector could recognize when data is no longer accessible automatically.  However, since we're working in a Jupyter notebook, the variables that we set outside of functions are of global scope.  Julia doesn't know which we intend to use again and which we're done with.  
+For this exercise, we're working with some largish datasets, so it may be helpful to free up memory when it's not longer need.  
+Here's an example of a macro that will do that for us.[^1]
+
+[^1]: Note that Python's garbage collector is separate from Julia's.  I'm not sure if the part about Python is doing what I want.  If there are any python experts, I'd appreciate feedback.
+
+```julia
+@pyimport gc as pygc                 # Import Python's garbage collector (need to avoid conflicts)
+
+"Set var to nothing and explicitly call the garbage collector."
+macro purge_data(var)
+    return :( 
+        call_python_gc = (typeof($var) <: PyObject) ? true : false;
+        global $var = nothing;       # Set variable to nothing
+        GC.gc();                     # Call Julia's garbage collector
+        if call_python_gc 
+            # println("# Calling Python's garbage collector")
+            pygc.collect()          # Call Python's garbage collector
+        end;
+        nothing;
+    )
+end
+```
+
+We can use this macro to purge data in variables that we won't be needing anymore.
+
+```julia
+@purge_data data_from_astropy
+@purge_data dict
+@purge_data df_csv
+```
+
+Now, the variables still exist in our namespace, but we try to access one of those variables, we will get `nothing`.
+
+```julia
+data_from_astropy
+```
+
+## Comparing time to read binary files
+
+There are numerous binary file formats that one could use.  Here, we'll try using JLD2 which is a subset of the [HDF5](https://www.hdfgroup.org/solutions/hdf5/) file format.  This means that when [Julia's JLD2 package](https://github.com/JuliaIO/JLD2.jl) writes jld2 files, they can be read by other programs that can read HDF5 files.  However, a generic HDF5 file is not a valid JLD2 file.  If you want to read a HDF5 file, then you can use Julia's [HDF5.jl package](https://github.com/JuliaIO/HDF5.jl).  The [FileIO.jl](https://github.com/JuliaIO/FileIO.jl) package provides a common interface for reading and writing from multiple file formats.
+
+As before, we'll load the packages and call each function once using a small DataFrame, just so they get compiled before we benchmark them.
+
+```julia
+using JLD2, FileIO
+@save joinpath(path,"silly.jld2") small_df 
+@load joinpath(path,"silly.jld2") small_df
+load(joinpath(path,"silly.jld2"), "small_df");
+```
+
+Now time how long it takes to save the data to a JLD2 file.
+
+```julia
+filename_jld2 = replace(filename_ipac, ".txt" => ".jld2") 
+@time @save filename_jld2 df
+```
+
+Now time how long it takes to loead the data from the JLD2 file.
+
+```julia
+@time df_jld2 = load(filename_jld2,"df");
+```
+
+Next, we'll compare the filesizes for the JLD2 file to the CSV file.  How large would you guess the JLD2 file will be?
+
+INSERT RESPONSE
+
+```julia
+filesize(filename_jld2)
+```
+
+How did the actual JLD2 filesize compare to the CSV filesize?  
+What explains this difference?  Can you think of a circumstance when the relative sizes would switch?
+
+INSERT RESPONSE
+
+We won't need the `df_jld2` DataFrame again, so let's purge it.
+
+```julia
+@purge_data df_jld2
+```
+
+## Feather
+
+[Feather](https://github.com/wesm/feather) is another binary file format that is based on [Apache Arrow](https://arrow.apache.org/) and that aims to provide efficient storage, and fast reading and writing.  It pays particular attention to strings of variable length (very useful if dealing with webpages, tweets, etc.).  There is a native Julia implementation, [Feather.jl](http://juliadata.github.io/Feather.jl/stable/) that we can try.  As before, we'll import the package and execute each command once before timing the reading and writing of our big data table.
+
+```julia
+using Feather
+filename_feather = replace(filename_ipac, ".txt" => ".feather") 
+Feather.write(filename_feather, small_df)
+Feather.read(filename_feather);
+```
+
+Now, let's time how long it takes to write and read our dataframe as feather files.
+
+```julia
+@time Feather.write(filename_feather, df)
+```
+
+```julia
+@time df_feather = Feather.read(filename_feather)
+filesize(filename_feather)
+```
+
+How did the runtime and size of the feather compare to those the JLD2 file?  
+
+INSERT RESPONSE
+
+Now we can purge the data in `df_feather`.
+
+```julia
+@purge_data df_feather
+```
+
+## FITS
+
+Astronomers often use the [FITS file format](https://en.wikipedia.org/wiki/FITS).  Like [HDF5](https://www.hdfgroup.org/solutions/hdf5/), it's a very flexible and thus complicated file format.  
+Therefore, most languages call a common [FITSIO library written in C](https://heasarc.gsfc.nasa.gov/fitsio/), rather than implementing code themselves.  Indeed, that's what [Julia's FITSIO.jl package](https://github.com/JuliaAstro/FITSIO.jl) does.
+
+```julia
+using FITSIO
+```
+
+Unfortunately, the FITSIO package isn't as polished as the others.  It expects a `Dict` rather than a `DataFrame`, and it can't handle missing values.  So we'll make some helper functions.  Also, FITS files have complicated headers, so I'll provide a function to read all the tabular data from a simple FITS file.  Then we'll use each function once, so that Julia compiles them before we start timing.
+
+```julia
+"Convert a DataFrame to a Dict, replacing missing values with 0 or an empty string."
+function convert_dataframe_to_dict_remove_missing(df::DataFrame)
+    d = Dict(map(n->"$n"=>               # create a dictionary
+              ( any(ismissing.(df[n])) ? # if column contains a missing
+                    map(x-> !ismissing(x) ? # search for missings
+                        x :                 # leave non-missing values alone
+                        ( (eltype(df[n]) <: Number) ? zero(eltype(n)) : "")
+                        , df[n])            # but replace missing with 0 or ""
+                : df[n] ), # if nothing is missing, just use column as is
+            names(df) ))  
+end
+
+"Write a DataFrame to a FITS file, replacing missing values with 0 or an empty string."
+function write_dataframe_as_fits(filename::String, df::DataFrame)
+    try 
+       dict = convert_dataframe_to_dict_remove_missing(df) 
+       fits_file = FITS(filename,"w")
+       write(fits_file, dict )
+       close(fits_file)
+    catch
+        @warn("There was a problem writing a dataframe to " * filename * ".")
+    end
+end
+
+"Read the columns of the first table from a FITS file into a Dict"
+function read_fits_tables(filename::String)
+    dict = Dict{String,Any}()
+    fits_file = FITS(filename,"r")
+    # fits_file[1] is image data, we're interested in the table
+    @assert length(fits_file) >= 2
+    header = read_header(fits_file[2])
+    for i in 1:length(header)
+        c = get_comment(header,i)
+        if !occursin("label for field",c)
+            continue
+        end
+        h = header[i]
+        @assert typeof(h) == String
+        try  
+            dict[h] = read(fits_file[2],h)
+        catch
+            @warn "# Problem reading table column " * h * "."
+        end
+    end
+    close(fits_file)
+    return dict
+end
+
+write_dataframe_as_fits(joinpath(path,"silly.fits"),small_df)
+read_fits_tables(joinpath(path,"silly.fits"));
+```
+
+Now we can time how long it takes to write and read the data as FITS files.
+
+```julia
+filename_fits = replace(filename_ipac, ".txt" => ".fits") 
+@time write_dataframe_as_fits(filename_fits,df)
+```
+
+```julia
+@time read_fits_tables(filename_fits);
+filesize(filename_fits)
+```
+
+## Making a small/faster file
+
+Imagine that you were working with a table was even bigger than this one and wanted to make it smaller and load even faster.  
+Do you have any ideas how you could store the data more efficiently?
+
+INSERT RESPONSE
+
+The function below attempts to create a more efficient representation of this same data.
+Then we write it to disk as a feather file.  
+
+```julia
+function compact_my_data(df::DataFrame)
+   df_new = Dict{Symbol,Any}(n => nothing for n in names(df))
+   # Use TCE_ID as is
+   df_new[:TCE_ID] = df[:TCE_ID]
+   # Convert KIC_ID into a 4 byte integer
+   df_new[:KIC_ID] = convert.(Int32,df[:KIC_ID])
+   # Convert Recovered and Sky_Group into a 1 byte integer
+   map(k-> df_new[k] = convert.(Int8,df[k]), [:Recovered,:Sky_Group])
+   # Convert next set of variables into 1 bit each
+   map(k-> df_new[k] = convert.(Bool,df[k]), [:EB_injection, :Fit_Provenance, :Offset_from_source])
+   # Convert next set of variables into 4 byte floats
+   map(k-> df_new[k] = convert.(Float32,df[k]), [:N_Transit,:i_b,:i_ror,:i_dur,:i_dor,:i_epoch,:i_period,:i_depth,:Expected_MES,:Measured_MES])
+   # Store Offset_distance as an array with missing values  if Offset_from_source==0
+   df_new[:Offset_distance] = convert(Array{Union{Float32,Missing},1}, df[:Offset_distance])
+   df_new[:Offset_distance][.!df_new[:Offset_from_source]] .= missing
+   # Store r_* columns arrays with missing values if Recovered == 0
+   map(k-> (df_new[k] = convert(Array{Union{Float32,Missing},1}, df[k]);
+         df_new[k][df_new[:Recovered].==0] .= missing ),
+               [:r_epoch,:r_dor,:r_depth,:r_ror,:r_b,:r_dur,:r_period])
+   DataFrame(df_new)
+end
+
+filename_small_feather = replace(filename_feather, ".feather" => "_small.feather") 
+@time Feather.write(filename_small_feather, compact_my_data(df) )
+```
+
+```julia
+@time df_feather = Feather.read(filename_small_feather)
+filesize(filename_small_feather)
+```
+
+How does the filesize and read speed compare to the original feather file?  Can you explain why?
+
+INSERT RESPONSE
+
+Try to provide one example when it would make sense to use each of the following file formats:
+- CSV
+- JLD2
+- Feather
+- FITS
+
+INSERT RESPONSE
+
+If you've made plans for your class project, then what file format(s) are you planning on using?  Why?
+
+INSERT RESPONSE
+
+```julia
+```

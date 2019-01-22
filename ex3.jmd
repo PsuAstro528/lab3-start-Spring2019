@@ -1,0 +1,153 @@
+
+# Astro 528, Lab 3, Exercise 3
+# Dense Matrix-Vector Multiply
+
+Many problems involve performing linear algebra. Fortunately, there are excellent libraries that make use of clever algorithms to perform linear algebra efficiently and robustly. In this exercise, you'll write multiple functions to multiply a matrix times a vector to compare their performance.
+
+First, let's make sure you have all the packages you need installed.
+
+```julia
+using Pkg;
+Pkg.activate(".");
+Pkg.instantiate()
+using Random, Test, BenchmarkTools
+```
+
+### Using Julia's default library 
+Write a function `multiply_matrix_vector_default(A,b)` that takes a matrix A (e.g., type `Array{Float64,2}`) and a vector b (e.g., type `Vector{Float64` or `Array{Float64,1}`) and returns the product of A times b using Julia's default linear algebra routines (accessed by just `A*b`).
+
+```julia
+"Multiply matrix A and vector b using Julia's built-in linear algebra libraries"
+function multiply_matrix_vector_default(A::Matrix{T1}, b::Vector{T2}) where {T1<:Number, T2<:Number}
+    # INSERT CODE
+    # SOLUTION
+    @assert size(A,2)==size(b,1)
+    out = A*b
+end
+```
+
+### Hand-coded, inner loop over columns
+Write a function `multiply_matrix_vector_cols_inner(A,b)` that takes a matrix A and a vector b and returns the product of A times b, but without using Julia's default linear algebra routines. You'll use two loops. For this part, let the inner loop run over the columns (i.e., second index) for A. 
+
+```julia
+# INSERT CODE
+"Multiply matrix A and vector b by hand using columns for inner loop"
+function multiply_matrix_vector_cols_inner(A::Matrix{T1}, b::Vector{T2})  where {T1<:Number, T2<:Number}
+    # INSERT CODE
+    # SOLUTION
+    @assert size(A,2) == size(b,1)
+    out = zeros( promote_type(eltype(A),eltype(b)), size(A,1) )
+    for i in 1:size(A,1)
+        for j in 1:size(A,2)
+            out[i] += A[i,j]*b[j]
+        end
+    end
+    return out
+end
+```
+
+### Regression testing (1/2)
+Compare the results of your two functions aboves.  Make the comparison into a test than can be applied automatically.  
+Remember that you need to allow for imperfect results due to floating point arithmetic.
+
+```julia
+# INSERT CODE
+nrows = 4
+ncols = 8
+Random.seed!(42)
+test_in_A = rand(nrows,ncols)
+test_in_b = rand(ncols)
+@test all(multiply_matrix_vector_default(test_in_A,test_in_b) .≈ multiply_matrix_vector_cols_inner(test_in_A,test_in_b) )
+```
+
+### Hand-coded, inner loop over rows
+Write a function `multiply_matrix_vector_rows_inner(A,b)`that takes a matrix A and a vector b and returns the product of A times b, but without using Julia's default linear algebra routines. You'll use two loops. For this part, let the inner loop run over the rows (i.e., first index) for A. 
+
+```julia
+# INSERT CODE
+"Multiply matrix A and vector b by hand using columns for inner loop"
+function multiply_matrix_vector_rows_inner(A::Matrix{T1}, b::Vector{T2})  where {T1<:Number, T2<:Number}
+    # INSERT CODE
+    # SOLUTION
+    @assert size(A,2) == size(b,1)
+    out = zeros( promote_type(eltype(A),eltype(b)), size(A,1) )
+    for j in 1:size(A,2)
+        for i in 1:size(A,1)
+            out[i] += A[i,j]*b[j]
+        end
+    end
+    return out
+end
+```
+
+### Regession testing (2/2) 
+Apply your regressions test to your newest function.  Did the tests work as intended?  Or do you need to make any modifications?
+
+```julia
+# INSERT CODE
+Random.seed!(42)
+test_in_A = rand(nrows,ncols)
+test_in_b = rand(ncols)
+@test all(multiply_matrix_vector_default(test_in_A,test_in_b) .≈ multiply_matrix_vector_rows_inner(test_in_A,test_in_b) )
+```
+
+### Anticipate performance differences
+Before you benchmark these, think about how the different versions will perform. 
+Which version of the function do you predict will perform best for large matrices? Why?
+
+INSERT RESPONSE 
+
+Which version of the functions do you predict will perform best for small matrices? Why?
+
+INSERT RESPONSE
+
+### Benchmark as a function of problem size
+Benchmark each of these three functions for a wide range of matrix sizes, including at least one set of small matrices (e.g., 8x8) and one set of large matrices (e.g., 1024x1024 or larger).  Remember to make sure your functions have been compiled once before benchmarking.  You may also want to use the [BenchmarkTools.jl package](https://github.com/JuliaCI/BenchmarkTools.jl/)'s macros like `@btime` or `@benchmark`.  
+
+```julia
+# INSERT CODE
+nrows = 4
+ncols = 4
+Random.seed!(42)
+test_in_A = rand(nrows,ncols)
+test_in_b = rand(ncols)
+
+@benchmark multiply_matrix_vector_default(test_in_A,test_in_b)
+```
+
+```julia
+@benchmark multiply_matrix_vector_cols_inner(test_in_A,test_in_b)
+```
+
+```julia
+@benchmark multiply_matrix_vector_rows_inner(test_in_A,test_in_b)
+```
+
+```julia
+# INSERT CODE
+nrows = 1024
+ncols = 1024
+test_in_A = rand(nrows,ncols)
+test_in_b = rand(ncols)
+
+@benchmark multiply_matrix_vector_default(test_in_A,test_in_b)
+```
+
+```julia
+@benchmark multiply_matrix_vector_cols_inner(test_in_A,test_in_b)
+```
+
+```julia
+@benchmark multiply_matrix_vector_rows_inner(test_in_A,test_in_b)
+```
+
+### Compare performance
+
+Compare the performance of the three functions. How do the results compare to your predictions? For any predictions that weren't accurate, try to explain the observed performance behavior.
+
+INSERT RESPONSE
+
+Are there any implications of this lesson for the data structures that you use for your project?
+
+```julia
+```
