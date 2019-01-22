@@ -18,7 +18,7 @@ Remember, that you need follow the provided link to create your own private copy
 From your Jupyter notebook server, work through ex1.ipynb
 
 ## Exercise 2: DataFrames, Join, Query
-### Goal:
+### Goals:
 
 - Compare the performance of different ways of accessing a DataFrame 
 - Use DataFrames efficiently via `join` and queries
@@ -26,8 +26,8 @@ From your Jupyter notebook server, work through ex1.ipynb
 From your Jupyter notebook server, work through ex2.ipynb
 
 
-## Exercise 3
-#### Goal:  Dense Matrix-Vector Multiply
+## Exercise 3: Dense Matrix-Vector Multiply
+### Goals:
 
 - Compare the performance of using different memory layouts
 - Choose appropraite memory layout & data structures for a project
